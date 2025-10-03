@@ -10,14 +10,52 @@ const corsHeaders = {
 const RECEIPT_SCHEMA = {
   type: "object",
   properties: {
-    vendor: { type: "string" },
-    date: { type: "string", pattern: "\\d{4}-\\d{2}-\\d{2}" },
+    merchant_name: { type: "string" },
+    merchant_address: { type: "string" },
+    merchant_phone: { type: "string" },
+    datetime: { type: "string" },
+    currency: { type: "string", default: "CAD" },
     subtotal: { type: "number" },
     tps: { type: "number" },
     tvq: { type: "number" },
     total: { type: "number" },
-    currency: { type: "string" },
     payment_method: { type: "string" },
+    card_last4: { type: "string" },
+    line_items: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          description: { type: "string" },
+          quantity: { type: "number" },
+          unit_price: { type: "number" },
+          amount: { type: "number" }
+        }
+      }
+    },
+    tax_ids: {
+      type: "object",
+      properties: {
+        tps: { type: "string" },
+        tvq: { type: "string" }
+      }
+    }
+  },
+  required: ["merchant_name", "total"]
+};
+
+const INVOICE_SCHEMA = {
+  type: "object",
+  properties: {
+    vendor_name: { type: "string" },
+    invoice_number: { type: "string" },
+    invoice_date: { type: "string", pattern: "\\d{4}-\\d{2}-\\d{2}" },
+    due_date: { type: "string" },
+    po_number: { type: "string" },
+    currency: { type: "string", default: "USD" },
+    subtotal: { type: "number" },
+    tax: { type: "number" },
+    total: { type: "number" },
     line_items: {
       type: "array",
       items: {
@@ -31,31 +69,7 @@ const RECEIPT_SCHEMA = {
       }
     }
   },
-  required: ["vendor", "date", "total", "currency"]
-};
-
-const INVOICE_SCHEMA = {
-  type: "object",
-  properties: {
-    invoice_number: { type: "string" },
-    invoice_date: { type: "string", pattern: "\\d{4}-\\d{2}-\\d{2}" },
-    due_date: { type: "string" },
-    vendor: { type: "string" },
-    total_amount: { type: "number" },
-    currency: { type: "string" },
-    line_items: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          description: { type: "string" },
-          quantity: { type: "number" },
-          unit_price: { type: "number" }
-        }
-      }
-    }
-  },
-  required: ["invoice_number", "invoice_date", "vendor", "total_amount", "currency"]
+  required: ["vendor_name", "invoice_number", "total"]
 };
 
 async function classifyDocument(markdown: string): Promise<string> {
@@ -212,12 +226,14 @@ async function postProcess(documentId: string, adeResult: any, markdown: string,
   const normalized: any = { ...adeResult };
   
   // Normalize dates
-  if (normalized.date) normalized.date = normalizeDate(normalized.date) || normalized.date;
+  if (normalized.datetime) normalized.datetime = normalizeDate(normalized.datetime) || normalized.datetime;
   if (normalized.invoice_date) normalized.invoice_date = normalizeDate(normalized.invoice_date) || normalized.invoice_date;
   if (normalized.due_date) normalized.due_date = normalizeDate(normalized.due_date) || normalized.due_date;
   
-  // Default currency to CAD for CA orgs (simplified - could check org settings)
-  if (!normalized.currency) normalized.currency = "CAD";
+  // Default currency based on doc type
+  if (!normalized.currency) {
+    normalized.currency = docType === "receipt" ? "CAD" : "USD";
+  }
   
   // Validate totals for receipts
   let validation = null;
@@ -310,6 +326,9 @@ serve(async (req) => {
       .single();
 
     if (docError) throw docError;
+    
+    // Use the doc_type from document if set, otherwise classify
+    let docType = document.doc_type;
 
     // Download file from storage
     const { data: fileData, error: storageError } = await supabaseClient.storage
@@ -322,16 +341,18 @@ serve(async (req) => {
     const text = await fileData.text();
     const markdown = `# Document\n\n${text.substring(0, 2000)}`; // Simplified
     
-    // Step 1: Classify document
-    const docType = await classifyDocument(markdown);
-    console.log("Document classified as:", docType);
-    
-    // Update doc_type if different
-    if (docType !== document.doc_type) {
+    // Step 1: Classify if not already set
+    if (!docType) {
+      docType = await classifyDocument(markdown);
+      console.log("Document classified as:", docType);
+      
+      // Update doc_type
       await supabaseClient
         .from("documents")
         .update({ doc_type: docType })
         .eq("id", documentId);
+    } else {
+      console.log("Using user-selected doc type:", docType);
     }
     
     // Step 2: Extract with LLM (or mock if API unavailable)
@@ -341,8 +362,8 @@ serve(async (req) => {
     if (!adeResult) {
       console.log("Using mock extraction");
       adeResult = docType === "receipt" ? {
-        vendor: "Sample Vendor",
-        date: new Date().toISOString().split('T')[0],
+        merchant_name: "Sample Vendor",
+        datetime: new Date().toISOString(),
         subtotal: 43.49,
         tps: 2.17,
         tvq: 4.34,
@@ -350,11 +371,11 @@ serve(async (req) => {
         currency: "CAD",
         line_items: []
       } : {
+        vendor_name: "Sample Vendor Corp",
         invoice_number: `INV-${Math.floor(Math.random() * 10000)}`,
         invoice_date: new Date().toISOString().split('T')[0],
-        vendor: "Sample Vendor Corp",
-        total_amount: 50.00,
-        currency: "CAD",
+        total: 50.00,
+        currency: "USD",
         line_items: []
       };
     }

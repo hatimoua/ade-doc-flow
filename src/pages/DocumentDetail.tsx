@@ -35,6 +35,8 @@ const DocumentDetail = () => {
   const [previewPayload, setPreviewPayload] = useState<any>(null);
   const [selectedConnection, setSelectedConnection] = useState<string>("");
   const [pushing, setPushing] = useState(false);
+  const [selectedDocType, setSelectedDocType] = useState<string>("");
+  const [extracting, setExtracting] = useState(false);
 
   const { data: document, isLoading, refetch } = useQuery({
     queryKey: ["document", id],
@@ -62,6 +64,15 @@ const DocumentDetail = () => {
         .single();
 
       if (error) throw error;
+      
+      // Set initial doc type from document
+      if (data?.doc_type && !selectedDocType) {
+        setSelectedDocType(data.doc_type);
+      } else if (!selectedDocType) {
+        // Default to receipt for images
+        setSelectedDocType(data?.mime_type?.startsWith('image/') ? 'receipt' : 'invoice');
+      }
+      
       return data;
     },
   });
@@ -173,6 +184,53 @@ const DocumentDetail = () => {
     }
   };
 
+  const handleDocTypeChange = async (newDocType: string) => {
+    setSelectedDocType(newDocType);
+    
+    // Persist doc type immediately
+    if (document) {
+      await supabase
+        .from("documents")
+        .update({ doc_type: newDocType })
+        .eq("id", document.id);
+      
+      toast({
+        title: "Document type updated",
+        description: `Changed to ${newDocType}`,
+      });
+      
+      refetch();
+    }
+  };
+
+  const handleRunExtract = async () => {
+    if (!document) return;
+    
+    setExtracting(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('parse-document', {
+        body: { documentId: document.id }
+      });
+      
+      if (error) throw error;
+      
+      toast({
+        title: "Extraction complete",
+        description: `Extracted as ${data.docType} with ${(data.confidence * 100).toFixed(0)}% confidence`,
+      });
+      
+      refetch();
+    } catch (error: any) {
+      toast({
+        title: "Extraction failed",
+        description: error.message,
+        variant: "destructive",
+      });
+    } finally {
+      setExtracting(false);
+    }
+  };
+
   const handleApproveAndPush = async () => {
     if (!record) return;
 
@@ -260,6 +318,22 @@ const DocumentDetail = () => {
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <Select value={selectedDocType} onValueChange={handleDocTypeChange}>
+              <SelectTrigger className="w-32">
+                <SelectValue placeholder="Doc Type" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="receipt">Receipt</SelectItem>
+                <SelectItem value="invoice">Invoice</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button 
+              variant="outline" 
+              onClick={handleRunExtract}
+              disabled={extracting || document.status === 'parsing'}
+            >
+              {extracting ? "Extracting..." : "Run Extract"}
+            </Button>
             <Badge variant={document.status === "ready" ? "default" : "secondary"}>
               {document.status}
             </Badge>
