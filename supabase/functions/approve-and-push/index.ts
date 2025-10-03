@@ -188,7 +188,8 @@ serve(async (req) => {
         JSON.stringify({ 
           success: true, 
           jobId: pushJob.id,
-          result 
+          result,
+          csvData: result?.csvData || null // Include CSV for download
         }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
@@ -283,22 +284,45 @@ async function executeCsv(payload: any, meta: any): Promise<any> {
   const delimiter = meta?.delimiter || ',';
   const decimal = meta?.decimal || '.';
 
-  const headers = Object.keys(payload);
-  const values = Object.values(payload).map(v => {
-    if (typeof v === 'number') {
-      return String(v).replace('.', decimal);
+  // Flatten nested objects for CSV
+  const flattenObject = (obj: any, prefix = ''): any => {
+    const flattened: any = {};
+    for (const key in obj) {
+      const newKey = prefix ? `${prefix}.${key}` : key;
+      if (obj[key] && typeof obj[key] === 'object' && !Array.isArray(obj[key])) {
+        Object.assign(flattened, flattenObject(obj[key], newKey));
+      } else {
+        flattened[newKey] = obj[key];
+      }
     }
-    if (typeof v === 'string' && v.includes(delimiter)) {
-      return `"${v}"`;
+    return flattened;
+  };
+
+  const flatPayload = flattenObject(payload);
+  const headers = Object.keys(flatPayload);
+  const values = headers.map(h => {
+    const val = flatPayload[h];
+    if (val === null || val === undefined) return '';
+    if (typeof val === 'number') {
+      return String(val).replace('.', decimal);
     }
-    return v;
+    if (typeof val === 'string' && (val.includes(delimiter) || val.includes('"') || val.includes('\n'))) {
+      return `"${val.replace(/"/g, '""')}"`;
+    }
+    if (Array.isArray(val)) {
+      return `"${val.join('; ')}"`;
+    }
+    return val;
   });
 
   const csv = [headers.join(delimiter), values.join(delimiter)].join('\n');
   
+  console.log('Generated CSV with', headers.length, 'columns');
+  
   return {
     format: 'csv',
     content: csv,
+    csvData: csv, // For UI download
     filename: `record_${Date.now()}.csv`,
   };
 }

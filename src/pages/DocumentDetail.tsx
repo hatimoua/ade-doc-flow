@@ -175,10 +175,27 @@ const DocumentDetail = () => {
 
       if (error) throw error;
 
-      toast({
-        title: "Success",
-        description: "Record approved and pushed successfully",
-      });
+      // Handle CSV download
+      const selectedConn = connections?.find(c => c.id === selectedConnection);
+      if (selectedConn?.adapter === 'csv' && data?.csvData) {
+        const blob = new Blob([data.csvData], { type: 'text/csv' });
+        const url = URL.createObjectURL(blob);
+        const a = window.document.createElement('a');
+        a.href = url;
+        a.download = `${document.filename.replace(/\.[^/.]+$/, '')}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+        
+        toast({
+          title: "Success",
+          description: "CSV file generated and downloaded",
+        });
+      } else {
+        toast({
+          title: "Success",
+          description: "Record approved and pushed successfully",
+        });
+      }
 
       setShowPreview(false);
       setShowPushDialog(false);
@@ -458,9 +475,21 @@ const DocumentDetail = () => {
                       </Button>
                     </div>
                     {!connections?.length && (
-                      <p className="text-sm text-muted-foreground text-center">
-                        No active connections. <Button variant="link" onClick={() => navigate('/connections')}>Set up a connection</Button>
-                      </p>
+                      <div className="text-center p-4 border border-dashed rounded-lg">
+                        <AlertCircle className="h-8 w-8 mx-auto mb-2 text-muted-foreground" />
+                        <p className="text-sm font-medium mb-1">No Active Connections</p>
+                        <p className="text-xs text-muted-foreground mb-3">
+                          Set up a connection to push records to your ERP system
+                        </p>
+                        <Button variant="default" size="sm" onClick={() => navigate('/connections')}>
+                          Configure Connections
+                        </Button>
+                      </div>
+                    )}
+                    {connections && connections.length > 0 && !connections.some(c => c.is_default) && (
+                      <div className="text-xs text-muted-foreground text-center p-2 bg-muted rounded">
+                        💡 Tip: Set a default connection for faster approvals
+                      </div>
                     )}
                   </div>
                 </CardContent>
