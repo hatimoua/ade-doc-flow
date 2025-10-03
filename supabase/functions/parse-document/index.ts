@@ -7,7 +7,7 @@ const corsHeaders = {
 };
 
 const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-const LANDINGAI_API_KEY = Deno.env.get("LANDINGAI_API_KEY");
+const LANDINGAI_API_KEY = Deno.env.get("LANDINGAI_API_KEY_2");
 const ADE_PARSE_URL = "https://api.va.landing.ai/v1/ade/parse";
 const ADE_EXTRACT_URL = "https://api.va.landing.ai/v1/ade/extract";
 
