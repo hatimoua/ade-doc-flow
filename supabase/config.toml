@@ -14,3 +14,6 @@ verify_jwt = false
 
 [functions.approve-and-push]
 verify_jwt = true
+
+[functions.ensure-organization]
+verify_jwt = true

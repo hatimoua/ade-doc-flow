@@ -15,7 +15,7 @@ const Dashboard = () => {
   const [uploading, setUploading] = useState(false);
 
   // Fetch user's organization
-  const { data: profile } = useQuery({
+  const { data: profile, isLoading: profileLoading } = useQuery({
     queryKey: ["profile"],
     queryFn: async () => {
       const { data: { user } } = await supabase.auth.getUser();
@@ -25,9 +25,30 @@ const Dashboard = () => {
         .from("profiles")
         .select("*, organizations(*)")
         .eq("id", user.id)
-        .single();
+        .maybeSingle();
 
       if (error) throw error;
+
+      // If no profile or no organization, call ensure-organization function
+      if (!data || !data.organization_id) {
+        console.log("No organization found, creating one...");
+        const { data: ensureData, error: ensureError } = await supabase.functions.invoke(
+          'ensure-organization'
+        );
+
+        if (ensureError) throw ensureError;
+
+        // Refetch profile after organization creation
+        const { data: refreshedData, error: refreshError } = await supabase
+          .from("profiles")
+          .select("*, organizations(*)")
+          .eq("id", user.id)
+          .maybeSingle();
+
+        if (refreshError) throw refreshError;
+        return refreshedData;
+      }
+
       return data;
     },
   });
@@ -76,7 +97,7 @@ const Dashboard = () => {
     if (!profile?.organization_id) {
       toast({
         title: "Error",
-        description: "Organization not found",
+        description: "Please wait while we set up your organization",
         variant: "destructive",
       });
       return;
@@ -156,6 +177,32 @@ const Dashboard = () => {
       </Badge>
     );
   };
+
+  if (profileLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="text-center space-y-3">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto"></div>
+          <p className="text-muted-foreground">Setting up your workspace...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!profile?.organization_id) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <Card className="max-w-md">
+          <CardHeader>
+            <CardTitle>Organization Setup Required</CardTitle>
+            <CardDescription>
+              We're creating your organization. Please refresh the page if this takes too long.
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-8">

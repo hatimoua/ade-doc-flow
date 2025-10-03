@@ -16,6 +16,7 @@ import {
   SheetContent,
   SheetTrigger,
 } from "@/components/ui/sheet";
+import { OrganizationSwitcher } from "@/components/OrganizationSwitcher";
 
 interface LayoutProps {
   children: ReactNode;
@@ -98,6 +99,9 @@ const Layout = ({ children }: LayoutProps) => {
         <nav className="flex-1 space-y-1 px-3 py-4">
           <NavLinks />
         </nav>
+        <div className="border-t">
+          <OrganizationSwitcher />
+        </div>
         <div className="border-t p-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -139,6 +143,9 @@ const Layout = ({ children }: LayoutProps) => {
             <nav className="flex-1 space-y-1 px-3 py-4">
               <NavLinks />
             </nav>
+            <div className="border-t">
+              <OrganizationSwitcher />
+            </div>
             <div className="border-t p-4">
               <Button
                 variant="outline"
