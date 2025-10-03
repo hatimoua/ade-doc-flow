@@ -336,20 +336,36 @@ const DocumentDetail = () => {
                   <CardHeader>
                     <CardTitle>Extracted Data</CardTitle>
                     <CardDescription>
-                      Data extracted by Landing AI ADE
+                      Intelligent extraction with AI validation
                     </CardDescription>
                   </CardHeader>
                   <CardContent>
                     {adeResult ? (
                       <div className="space-y-4">
-                        {adeResult.confidence_score && (
-                          <div className="flex items-center justify-between p-3 bg-muted rounded-lg">
-                            <span className="text-sm font-medium">Confidence Score</span>
-                            <Badge variant="default">
-                              {adeResult.confidence_score}%
+                        {/* Confidence & Recovery Info */}
+                        <div className="flex items-center gap-2 flex-wrap">
+                          {adeResult.confidence_score !== null && (
+                            <Badge variant={
+                              (adeResult.confidence_score ?? 0) >= 0.8 ? "default" :
+                              (adeResult.confidence_score ?? 0) >= 0.6 ? "secondary" : "destructive"
+                            }>
+                              Confidence: {((adeResult.confidence_score ?? 0) * 100).toFixed(0)}%
                             </Badge>
-                          </div>
-                        )}
+                          )}
+                          
+                          {adeResult.metadata && typeof adeResult.metadata === 'object' && (adeResult.metadata as any)?.tax_rule && (
+                            <Badge variant="outline">
+                              Tax Rule: {(adeResult.metadata as any).tax_rule === 'tax_included' ? 'Taxes Included' : 'Taxes Added'}
+                            </Badge>
+                          )}
+                          
+                          {adeResult.metadata && typeof adeResult.metadata === 'object' && (adeResult.metadata as any)?.recovered_fields && (adeResult.metadata as any).recovered_fields.length > 0 && (
+                            <Badge variant="secondary" className="gap-1">
+                              <span className="text-xs">🤖</span>
+                              Recovered: {(adeResult.metadata as any).recovered_fields.join(', ')}
+                            </Badge>
+                          )}
+                        </div>
                         {adeResult.markdown_content && (
                           <div className="prose prose-sm max-w-none">
                             <pre className="bg-muted p-4 rounded-lg text-xs overflow-auto max-h-96">
