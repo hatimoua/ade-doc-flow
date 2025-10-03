@@ -134,8 +134,12 @@ function fallbackMarkdownExtraction(fileBuffer: ArrayBuffer, mimeType: string): 
   console.log("Using fallback text extraction");
   const decoder = new TextDecoder("utf-8", { fatal: false });
   const text = decoder.decode(fileBuffer);
-  const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0).slice(0, 100);
-  return lines.join("\n");
+  
+  // Remove null bytes and other problematic Unicode characters
+  const cleaned = text.replace(/\u0000/g, '').replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+  
+  const lines = cleaned.split(/\r?\n/).filter((l) => l.trim().length > 0).slice(0, 100);
+  return lines.join("\n") || "# Document\n\nUnable to extract text from binary file.";
 }
 
 // ========================================
