@@ -1,5 +1,6 @@
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import Layout from "@/components/Layout";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -7,20 +8,56 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ArrowLeft, Download, FileText, AlertCircle } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+  DialogDescription,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { ArrowLeft, Download, FileText, AlertCircle, Eye, Send, ExternalLink } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 const DocumentDetail = () => {
   const { id } = useParams();
   const navigate = useNavigate();
   const { toast } = useToast();
+  const [showPreview, setShowPreview] = useState(false);
+  const [showPushDialog, setShowPushDialog] = useState(false);
+  const [previewPayload, setPreviewPayload] = useState<any>(null);
+  const [selectedConnection, setSelectedConnection] = useState<string>("");
+  const [pushing, setPushing] = useState(false);
 
-  const { data: document, isLoading } = useQuery({
+  const { data: document, isLoading, refetch } = useQuery({
     queryKey: ["document", id],
     queryFn: async () => {
       const { data, error } = await supabase
         .from("documents")
-        .select("*")
+        .select(`
+          *,
+          records (
+            *,
+            push_jobs (
+              id,
+              status,
+              created_at,
+              completed_at,
+              error_message,
+              connections (
+                display_name,
+                adapter
+              )
+            )
+          )
+        `)
         .eq("id", id)
         .single();
 
@@ -44,20 +81,35 @@ const DocumentDetail = () => {
     enabled: !!id,
   });
 
-  const { data: record } = useQuery({
-    queryKey: ["record", id],
+  const { data: connections } = useQuery({
+    queryKey: ["connections"],
     queryFn: async () => {
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("organization_id")
+        .single();
+
+      if (!profile?.organization_id) return [];
+
       const { data, error } = await supabase
-        .from("records")
+        .from("connections")
         .select("*")
-        .eq("document_id", id)
-        .maybeSingle();
+        .eq("organization_id", profile.organization_id)
+        .eq("status", "active");
 
       if (error) throw error;
-      return data;
+      
+      const defaultConn = data?.find(c => c.is_default);
+      if (defaultConn && !selectedConnection) {
+        setSelectedConnection(defaultConn.id);
+      }
+      
+      return data || [];
     },
-    enabled: !!id,
   });
+
+  const record = document?.records?.[0];
+  const pushJob = record?.push_jobs?.[0];
 
   const handleDownload = async () => {
     if (!document) return;
@@ -81,6 +133,64 @@ const DocumentDetail = () => {
         description: error.message,
         variant: "destructive",
       });
+    }
+  };
+
+  const handlePreviewPayload = async () => {
+    if (!record) return;
+
+    try {
+      const { data, error } = await supabase.functions.invoke('approve-and-push', {
+        body: {
+          recordId: record.id,
+          connectionId: selectedConnection || undefined,
+          preview: true,
+        },
+      });
+
+      if (error) throw error;
+      setPreviewPayload(data);
+      setShowPreview(true);
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error.message,
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleApproveAndPush = async () => {
+    if (!record) return;
+
+    setPushing(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('approve-and-push', {
+        body: {
+          recordId: record.id,
+          connectionId: selectedConnection || undefined,
+          preview: false,
+        },
+      });
+
+      if (error) throw error;
+
+      toast({
+        title: "Success",
+        description: "Record approved and pushed successfully",
+      });
+
+      setShowPreview(false);
+      setShowPushDialog(false);
+      refetch();
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error.message,
+        variant: "destructive",
+      });
+    } finally {
+      setPushing(false);
     }
   };
 
@@ -119,11 +229,16 @@ const DocumentDetail = () => {
               Uploaded {new Date(document.created_at).toLocaleDateString()}
             </p>
           </div>
-          <Badge
-            variant={document.status === "ready" ? "default" : "secondary"}
-          >
-            {document.status}
-          </Badge>
+          <div className="flex items-center gap-2">
+            <Badge variant={document.status === "ready" ? "default" : "secondary"}>
+              {document.status}
+            </Badge>
+            {pushJob && (
+              <Badge variant={pushJob.status === 'success' ? 'default' : 'secondary'}>
+                Job: {pushJob.status}
+              </Badge>
+            )}
+          </div>
           <Button onClick={handleDownload}>
             <Download className="mr-2 h-4 w-4" />
             Download
@@ -268,25 +383,85 @@ const DocumentDetail = () => {
                           </div>
                         </div>
                       )}
+                      {pushJob && (
+                        <div className="flex items-center gap-3 p-3 bg-muted rounded-lg">
+                          <div className={`h-2 w-2 rounded-full ${
+                            pushJob.status === 'success' ? 'bg-green-500' : 
+                            pushJob.status === 'failed' ? 'bg-red-500' : 'bg-yellow-500'
+                          }`}></div>
+                          <div className="flex-1">
+                            <p className="text-sm font-medium">
+                              Pushed to {pushJob.connections?.display_name}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              {new Date(pushJob.created_at).toLocaleString()} · {pushJob.status}
+                            </p>
+                          </div>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => navigate('/jobs')}
+                          >
+                            <ExternalLink className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      )}
                     </div>
                   </CardContent>
                 </Card>
               </TabsContent>
             </Tabs>
 
-            {document.status === "uploaded" && (
+            {record && record.status === "pending_review" && !pushJob && (
               <Card className="border-primary">
                 <CardHeader>
-                  <CardTitle className="text-sm">Next Steps</CardTitle>
+                  <CardTitle className="text-sm">Ready to Push</CardTitle>
+                  <CardDescription>
+                    Review the extracted data and push to your ERP system
+                  </CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <div className="space-y-2">
-                    <Button className="w-full">
-                      Parse Document
-                    </Button>
-                    <Button className="w-full" variant="outline">
-                      Extract with Schema
-                    </Button>
+                  <div className="space-y-3">
+                    <div>
+                      <label className="text-sm font-medium">Select Connection</label>
+                      <Select value={selectedConnection} onValueChange={setSelectedConnection}>
+                        <SelectTrigger className="mt-1">
+                          <SelectValue placeholder="Choose a connection" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {connections?.map((conn) => (
+                            <SelectItem key={conn.id} value={conn.id}>
+                              {conn.display_name} ({conn.adapter})
+                              {conn.is_default && " (Default)"}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        className="flex-1"
+                        variant="outline"
+                        onClick={handlePreviewPayload}
+                        disabled={!selectedConnection}
+                      >
+                        <Eye className="mr-2 h-4 w-4" />
+                        Preview Payload
+                      </Button>
+                      <Button
+                        className="flex-1"
+                        onClick={() => setShowPushDialog(true)}
+                        disabled={!selectedConnection}
+                      >
+                        <Send className="mr-2 h-4 w-4" />
+                        Approve & Push
+                      </Button>
+                    </div>
+                    {!connections?.length && (
+                      <p className="text-sm text-muted-foreground text-center">
+                        No active connections. <Button variant="link" onClick={() => navigate('/connections')}>Set up a connection</Button>
+                      </p>
+                    )}
                   </div>
                 </CardContent>
               </Card>
@@ -294,6 +469,54 @@ const DocumentDetail = () => {
           </div>
         </div>
       </div>
+
+      {/* Preview Dialog */}
+      <Dialog open={showPreview} onOpenChange={setShowPreview}>
+        <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Payload Preview</DialogTitle>
+            <DialogDescription>
+              This is the data that will be sent to {previewPayload?.connection?.displayName}
+            </DialogDescription>
+          </DialogHeader>
+          {previewPayload && (
+            <div className="space-y-4">
+              <div className="flex items-center gap-2">
+                <Badge variant="outline" className="capitalize">
+                  {previewPayload.connection.adapter}
+                </Badge>
+                <span className="text-sm text-muted-foreground">
+                  {previewPayload.connection.displayName}
+                </span>
+              </div>
+              <pre className="bg-muted p-4 rounded-lg text-xs overflow-auto max-h-96">
+                {JSON.stringify(previewPayload.payload, null, 2)}
+              </pre>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Push Confirmation Dialog */}
+      <Dialog open={showPushDialog} onOpenChange={setShowPushDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Approve and Push</DialogTitle>
+            <DialogDescription>
+              This will approve the record and push it to your selected ERP connection.
+              This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowPushDialog(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleApproveAndPush} disabled={pushing}>
+              {pushing ? "Pushing..." : "Confirm & Push"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Layout>
   );
 };
