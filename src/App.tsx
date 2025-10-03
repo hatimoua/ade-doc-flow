@@ -10,6 +10,7 @@ import Documents from "./pages/Documents";
 import DocumentDetail from "./pages/DocumentDetail";
 import Records from "./pages/Records";
 import Settings from "./pages/Settings";
+import Connections from "./pages/Connections";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -28,6 +29,7 @@ const App = () => (
           <Route path="/documents/:id" element={<DocumentDetail />} />
           <Route path="/records" element={<Records />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/connections" element={<Connections />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </BrowserRouter>

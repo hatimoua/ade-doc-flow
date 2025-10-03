@@ -137,6 +137,53 @@ export type Database = {
           },
         ]
       }
+      connections: {
+        Row: {
+          adapter: Database["public"]["Enums"]["connection_adapter"]
+          created_at: string
+          display_name: string
+          id: string
+          is_default: boolean | null
+          last_validated_at: string | null
+          meta: Json | null
+          organization_id: string
+          status: Database["public"]["Enums"]["connection_status"]
+          updated_at: string
+        }
+        Insert: {
+          adapter: Database["public"]["Enums"]["connection_adapter"]
+          created_at?: string
+          display_name: string
+          id?: string
+          is_default?: boolean | null
+          last_validated_at?: string | null
+          meta?: Json | null
+          organization_id: string
+          status?: Database["public"]["Enums"]["connection_status"]
+          updated_at?: string
+        }
+        Update: {
+          adapter?: Database["public"]["Enums"]["connection_adapter"]
+          created_at?: string
+          display_name?: string
+          id?: string
+          is_default?: boolean | null
+          last_validated_at?: string | null
+          meta?: Json | null
+          organization_id?: string
+          status?: Database["public"]["Enums"]["connection_status"]
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "connections_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       documents: {
         Row: {
           created_at: string
@@ -183,6 +230,51 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "documents_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      field_maps: {
+        Row: {
+          connection_id: string | null
+          created_at: string
+          doc_type: string
+          id: string
+          map: Json
+          organization_id: string
+          updated_at: string
+        }
+        Insert: {
+          connection_id?: string | null
+          created_at?: string
+          doc_type: string
+          id?: string
+          map?: Json
+          organization_id: string
+          updated_at?: string
+        }
+        Update: {
+          connection_id?: string | null
+          created_at?: string
+          doc_type?: string
+          id?: string
+          map?: Json
+          organization_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "field_maps_connection_id_fkey"
+            columns: ["connection_id"]
+            isOneToOne: false
+            referencedRelation: "connections"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "field_maps_organization_id_fkey"
             columns: ["organization_id"]
             isOneToOne: false
             referencedRelation: "organizations"
@@ -250,6 +342,7 @@ export type Database = {
         Row: {
           adapter_id: string
           completed_at: string | null
+          connection_id: string | null
           created_at: string
           error_message: string | null
           id: string
@@ -263,6 +356,7 @@ export type Database = {
         Insert: {
           adapter_id: string
           completed_at?: string | null
+          connection_id?: string | null
           created_at?: string
           error_message?: string | null
           id?: string
@@ -276,6 +370,7 @@ export type Database = {
         Update: {
           adapter_id?: string
           completed_at?: string | null
+          connection_id?: string | null
           created_at?: string
           error_message?: string | null
           id?: string
@@ -292,6 +387,13 @@ export type Database = {
             columns: ["adapter_id"]
             isOneToOne: false
             referencedRelation: "adapter_configs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "push_jobs_connection_id_fkey"
+            columns: ["connection_id"]
+            isOneToOne: false
+            referencedRelation: "connections"
             referencedColumns: ["id"]
           },
           {
@@ -411,6 +513,8 @@ export type Database = {
       }
     }
     Enums: {
+      connection_adapter: "quickbooks" | "xero" | "netsuite" | "webhook" | "csv"
+      connection_status: "disconnected" | "active" | "error"
       doc_status:
         | "uploaded"
         | "parsing"
@@ -548,6 +652,8 @@ export type CompositeTypes<
 export const Constants = {
   public: {
     Enums: {
+      connection_adapter: ["quickbooks", "xero", "netsuite", "webhook", "csv"],
+      connection_status: ["disconnected", "active", "error"],
       doc_status: [
         "uploaded",
         "parsing",
