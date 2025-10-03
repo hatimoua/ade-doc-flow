@@ -104,7 +104,8 @@ async function parseDocumentWithADE(fileBuffer: ArrayBuffer, mimeType: string, f
   try {
     const formData = new FormData();
     const blob = new Blob([fileBuffer], { type: mimeType });
-    formData.append("file", blob, filename);
+    formData.append("document", blob, filename);
+    formData.append("model", "dpt-2-20250919");
 
     const response = await fetch(ADE_PARSE_URL, {
       method: "POST",
@@ -161,6 +162,7 @@ async function extractWithADE(markdown: string, docType: string): Promise<any> {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
+        model: "claude-3-5-sonnet-20241022",
         markdown: markdown,
         schema: schema,
       }),
