@@ -414,29 +414,50 @@ const DocumentDetail = () => {
                     </CardDescription>
                   </CardHeader>
                   <CardContent>
-                    {adeResult ? (
+                     {adeResult ? (
                       <div className="space-y-4">
-                        {/* Confidence & Recovery Info */}
+                        {/* Source & Confidence Info */}
                         <div className="flex items-center gap-2 flex-wrap">
+                          {/* Source badge */}
+                          {adeResult.metadata && typeof adeResult.metadata === 'object' && (adeResult.metadata as any)?.source === "ade" && (
+                            <Badge variant="default" className="text-xs">
+                              Extracted by ADE
+                            </Badge>
+                          )}
+                          {adeResult.metadata && typeof adeResult.metadata === 'object' && (adeResult.metadata as any)?.source === "llm_only" && (
+                            <Badge variant="secondary" className="text-xs">
+                              Extracted by LLM
+                            </Badge>
+                          )}
+                          
+                          {/* Recovery badge */}
+                          {adeResult.metadata && typeof adeResult.metadata === 'object' && (adeResult.metadata as any)?.recovery_attempted && (adeResult.metadata as any)?.recovered_fields?.length > 0 && (
+                            <Badge variant="secondary" className="gap-1">
+                              <span className="text-xs">🤖</span>
+                              Recovered by AI: {(adeResult.metadata as any).recovered_fields.join(", ")}
+                            </Badge>
+                          )}
+                          
+                          {/* Confidence badge with color coding */}
                           {adeResult.confidence_score !== null && (
-                            <Badge variant={
-                              (adeResult.confidence_score ?? 0) >= 0.8 ? "default" :
-                              (adeResult.confidence_score ?? 0) >= 0.6 ? "secondary" : "destructive"
-                            }>
+                            <Badge 
+                              variant="outline" 
+                              className={`text-xs ${
+                                (adeResult.confidence_score ?? 0) >= 0.8 
+                                  ? "border-green-500 text-green-700 dark:text-green-400" 
+                                  : (adeResult.confidence_score ?? 0) >= 0.6 
+                                  ? "border-yellow-500 text-yellow-700 dark:text-yellow-400" 
+                                  : "border-red-500 text-red-700 dark:text-red-400"
+                              }`}
+                            >
                               Confidence: {((adeResult.confidence_score ?? 0) * 100).toFixed(0)}%
                             </Badge>
                           )}
                           
+                          {/* Tax rule badge */}
                           {adeResult.metadata && typeof adeResult.metadata === 'object' && (adeResult.metadata as any)?.tax_rule && (
-                            <Badge variant="outline">
-                              Tax Rule: {(adeResult.metadata as any).tax_rule === 'tax_included' ? 'Taxes Included' : 'Taxes Added'}
-                            </Badge>
-                          )}
-                          
-                          {adeResult.metadata && typeof adeResult.metadata === 'object' && (adeResult.metadata as any)?.recovered_fields && (adeResult.metadata as any).recovered_fields.length > 0 && (
-                            <Badge variant="secondary" className="gap-1">
-                              <span className="text-xs">🤖</span>
-                              Recovered: {(adeResult.metadata as any).recovered_fields.join(', ')}
+                            <Badge variant="secondary" className="text-xs">
+                              {(adeResult.metadata as any).tax_rule === "tax_included" ? "Tax Included" : "Tax Added"}
                             </Badge>
                           )}
                         </div>

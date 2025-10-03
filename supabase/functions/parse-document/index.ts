@@ -6,6 +6,11 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+const LANDINGAI_API_KEY = Deno.env.get("LANDINGAI_API_KEY");
+const ADE_PARSE_URL = "https://api.va.landing.ai/v1/ade/parse";
+const ADE_EXTRACT_URL = "https://api.va.landing.ai/v1/ade/extract";
+
 // Document schemas
 const RECEIPT_SCHEMA = {
   type: "object",
@@ -72,6 +77,9 @@ const INVOICE_SCHEMA = {
   required: ["vendor_name", "invoice_number", "total"]
 };
 
+// ========================================
+// 1) CLASSIFY DOCUMENT TYPE
+// ========================================
 async function classifyDocument(markdown: string): Promise<string> {
   const lowerText = markdown.toLowerCase();
   
@@ -81,43 +89,132 @@ async function classifyDocument(markdown: string): Promise<string> {
     return "receipt";
   }
   
-  return "other";
+  return "receipt"; // Default to receipt for images
 }
 
-async function extractWithLLM(markdown: string, docType: string, recoveryMode = false, missingFields: string[] = []): Promise<any> {
-  const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-  if (!LOVABLE_API_KEY) {
-    console.warn("LOVABLE_API_KEY not configured, using mock extraction");
-    return null;
-  }
-
-  const schema = docType === "receipt" ? RECEIPT_SCHEMA : INVOICE_SCHEMA;
-  const requiredFields = schema.required.join(", ");
-  
-  let systemPrompt = `You are a precise document data extractor. Extract data from the document markdown and return ONLY valid JSON matching the schema. Use YYYY-MM-DD format for dates. For Quebec documents, default currency is CAD.`;
-  
-  if (recoveryMode) {
-    systemPrompt += ` RECOVERY MODE: Focus only on extracting these missing/low-confidence fields: ${missingFields.join(", ")}. Cite the page/section where you found each value.`;
+// ========================================
+// 2) ADE PARSE - Extract Markdown
+// ========================================
+async function parseDocumentWithADE(fileBuffer: ArrayBuffer, mimeType: string, filename: string): Promise<string> {
+  if (!LANDINGAI_API_KEY) {
+    console.warn("LANDINGAI_API_KEY not configured, using fallback");
+    return fallbackMarkdownExtraction(fileBuffer, mimeType);
   }
 
   try {
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    const formData = new FormData();
+    const blob = new Blob([fileBuffer], { type: mimeType });
+    formData.append("file", blob, filename);
+
+    const response = await fetch(ADE_PARSE_URL, {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${LOVABLE_API_KEY}`,
+        "Authorization": `Bearer ${LANDINGAI_API_KEY}`,
+      },
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`ADE Parse failed: ${response.status} - ${errorText}`);
+      return fallbackMarkdownExtraction(fileBuffer, mimeType);
+    }
+
+    const result = await response.json();
+    const markdown = result.markdown || result.text || "";
+    console.log("ADE Parse successful, markdown length:", markdown.length);
+    return markdown || fallbackMarkdownExtraction(fileBuffer, mimeType);
+  } catch (error) {
+    console.error("ADE Parse error:", error);
+    return fallbackMarkdownExtraction(fileBuffer, mimeType);
+  }
+}
+
+function fallbackMarkdownExtraction(fileBuffer: ArrayBuffer, mimeType: string): string {
+  console.log("Using fallback text extraction");
+  const decoder = new TextDecoder("utf-8", { fatal: false });
+  const text = decoder.decode(fileBuffer);
+  const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0).slice(0, 100);
+  return lines.join("\n");
+}
+
+// ========================================
+// 3) ADE EXTRACT - Get Structured Data
+// ========================================
+async function extractWithADE(markdown: string, docType: string): Promise<any> {
+  if (!LANDINGAI_API_KEY) {
+    console.warn("LANDINGAI_API_KEY not configured, using LLM");
+    return extractWithLLM(markdown, docType, false, []);
+  }
+
+  try {
+    const schema = docType === "receipt" ? RECEIPT_SCHEMA : INVOICE_SCHEMA;
+
+    const response = await fetch(ADE_EXTRACT_URL, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${LANDINGAI_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        markdown: markdown,
+        schema: schema,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`ADE Extract failed: ${response.status} - ${errorText}`);
+      return extractWithLLM(markdown, docType, false, []);
+    }
+
+    const result = await response.json();
+    console.log("ADE Extract successful");
+    return result.data || result;
+  } catch (error) {
+    console.error("ADE Extract error:", error);
+    return extractWithLLM(markdown, docType, false, []);
+  }
+}
+
+// ========================================
+// 4) LLM RECOVERY (only when needed)
+// ========================================
+async function extractWithLLM(markdown: string, docType: string, recoveryMode = false, missingFields: string[] = []): Promise<any> {
+  if (!LOVABLE_API_KEY) {
+    console.warn("LOVABLE_API_KEY not configured");
+    return {};
+  }
+
+  const schema = docType === "receipt" ? RECEIPT_SCHEMA : INVOICE_SCHEMA;
+  const schemaStr = JSON.stringify(schema, null, 2);
+
+  let systemPrompt = `Extract data from this ${docType} document. Return valid JSON matching the schema exactly.`;
+  
+  if (recoveryMode && missingFields.length > 0) {
+    systemPrompt = `RECOVERY MODE: Extract these missing fields from a ${docType}: ${missingFields.join(", ")}. Return valid JSON with only these fields.`;
+  }
+
+  const prompt = `Schema:\n${schemaStr}\n\nDocument:\n${markdown.slice(0, 1024)}`;
+
+  try {
+    const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${LOVABLE_API_KEY}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
         model: "google/gemini-2.5-flash",
         messages: [
           { role: "system", content: systemPrompt },
-          { role: "user", content: `Extract ${docType} data from this document:\n\n${markdown}\n\nRequired fields: ${requiredFields}` }
+          { role: "user", content: prompt },
         ],
         tools: [{
           type: "function",
           function: {
             name: "extract_document_data",
-            description: `Extract ${docType} data from the document`,
+            description: `Extract ${docType} data`,
             parameters: schema
           }
         }],
@@ -126,58 +223,80 @@ async function extractWithLLM(markdown: string, docType: string, recoveryMode = 
       }),
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error("LLM extraction failed:", response.status, errorText);
-      return null;
+    if (!res.ok) {
+      console.error("LLM error:", res.status, await res.text());
+      return {};
     }
 
-    const data = await response.json();
-    const toolCall = data.choices?.[0]?.message?.tool_calls?.[0];
+    const json = await res.json();
+    const toolCall = json.choices?.[0]?.message?.tool_calls?.[0];
     
     if (toolCall?.function?.arguments) {
-      const extracted = JSON.parse(toolCall.function.arguments);
-      console.log("LLM extraction successful:", { docType, recoveryMode, fieldsExtracted: Object.keys(extracted).length });
-      return extracted;
+      const data = JSON.parse(toolCall.function.arguments);
+      
+      // Redact PANs
+      if (data.card_number) {
+        const digits = data.card_number.replace(/\D/g, "");
+        data.card_last4 = digits.slice(-4);
+        delete data.card_number;
+      }
+      
+      console.log("LLM extraction successful:", recoveryMode ? "recovery" : "full");
+      return data;
     }
 
-    return null;
-  } catch (error) {
-    console.error("LLM extraction error:", error);
-    return null;
+    return {};
+  } catch (err) {
+    console.error("LLM extraction failed:", err);
+    return {};
   }
 }
 
-function normalizeNumbers(text: string): number | null {
-  if (!text) return null;
-  // Handle FR-CA format: 1 234,56 or 1234,56
-  const normalized = text.replace(/\s/g, '').replace(',', '.');
-  const num = parseFloat(normalized);
-  return isNaN(num) ? null : num;
-}
-
-function normalizeDate(text: string): string | null {
-  if (!text) return null;
+// ========================================
+// 5) NORMALIZATION HELPERS
+// ========================================
+function normalizeNumbers(data: any): any {
+  const normalized = { ...data };
   
-  // Try YYYY-MM-DD
-  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
-  
-  // Try DD/MM/YYYY or MM/DD/YYYY
-  const parts = text.split(/[\/\-\.]/);
-  if (parts.length === 3) {
-    const [a, b, c] = parts.map(p => parseInt(p, 10));
-    if (c > 1900 && b <= 12 && a <= 31) {
-      return `${c}-${String(b).padStart(2, '0')}-${String(a).padStart(2, '0')}`;
+  for (const key of Object.keys(normalized)) {
+    const val = normalized[key];
+    if (typeof val === 'string' && /^[\d\s,.]+$/.test(val)) {
+      const cleaned = val.replace(/\s/g, '').replace(',', '.');
+      const num = parseFloat(cleaned);
+      if (!isNaN(num)) normalized[key] = num;
     }
   }
   
-  return null;
+  return normalized;
 }
 
+function normalizeDate(data: any): any {
+  const normalized = { ...data };
+  
+  for (const key of ['datetime', 'invoice_date', 'due_date']) {
+    const val = normalized[key];
+    if (!val) continue;
+    
+    if (/^\d{4}-\d{2}-\d{2}$/.test(val)) continue; // Already normalized
+    
+    const parts = val.split(/[\/\-\.]/);
+    if (parts.length === 3) {
+      const [a, b, c] = parts.map((p: string) => parseInt(p, 10));
+      if (c > 1900 && b <= 12 && a <= 31) {
+        normalized[key] = `${c}-${String(b).padStart(2, '0')}-${String(a).padStart(2, '0')}`;
+      }
+    }
+  }
+  
+  return normalized;
+}
+
+// ========================================
+// 6) VALIDATION
+// ========================================
 function validateTotals(data: any, markdown: string): { valid: boolean; rule: string; confidence: number } {
   const lowerMarkdown = markdown.toLowerCase();
-  const isTpsIncluse = lowerMarkdown.includes("tps incluse") || lowerMarkdown.includes("taxes incluses");
-  const isTvqIncluse = lowerMarkdown.includes("tvq incluse");
+  const isTaxIncluded = lowerMarkdown.includes("tps incluse") || lowerMarkdown.includes("taxes incluses") || lowerMarkdown.includes("tvq incluse");
   
   const subtotal = data.subtotal || 0;
   const tps = data.tps || 0;
@@ -187,33 +306,29 @@ function validateTotals(data: any, markdown: string): { valid: boolean; rule: st
   let expectedTotal: number;
   let rule: string;
   
-  if (isTpsIncluse || isTvqIncluse) {
-    // Taxes included in total
+  if (isTaxIncluded) {
     expectedTotal = total;
     rule = "tax_included";
   } else {
-    // Taxes added to subtotal
     expectedTotal = subtotal + tps + tvq;
     rule = "tax_added";
   }
   
   const diff = Math.abs(total - expectedTotal);
-  const valid = diff < 0.02; // Allow 2 cents tolerance
+  const valid = diff < 0.02;
   const confidence = valid ? 0.95 : (diff < 0.5 ? 0.7 : 0.4);
   
   return { valid, rule, confidence };
 }
 
 function calculateConfidence(data: any, schema: any, validation: any): number {
-  let score = 0.5; // Base score
+  let score = 0.5;
   
-  // Check required fields
   const requiredFields = schema.required || [];
   const presentFields = requiredFields.filter((f: string) => data[f] !== null && data[f] !== undefined);
   const fieldScore = presentFields.length / requiredFields.length;
   score += fieldScore * 0.3;
   
-  // Check validation
   if (validation?.valid) {
     score += 0.2;
   }
@@ -221,83 +336,77 @@ function calculateConfidence(data: any, schema: any, validation: any): number {
   return Math.min(score, 1.0);
 }
 
-async function postProcess(documentId: string, adeResult: any, markdown: string, docType: string, orgId: string, supabaseClient: any) {
-  // Normalize data
-  const normalized: any = { ...adeResult };
-  
-  // Normalize dates
-  if (normalized.datetime) normalized.datetime = normalizeDate(normalized.datetime) || normalized.datetime;
-  if (normalized.invoice_date) normalized.invoice_date = normalizeDate(normalized.invoice_date) || normalized.invoice_date;
-  if (normalized.due_date) normalized.due_date = normalizeDate(normalized.due_date) || normalized.due_date;
-  
-  // Default currency based on doc type
-  if (!normalized.currency) {
-    normalized.currency = docType === "receipt" ? "CAD" : "USD";
-  }
-  
-  // Validate totals for receipts
-  let validation = null;
-  if (docType === "receipt") {
-    validation = validateTotals(normalized, markdown);
-  }
-  
-  // Calculate confidence
+// ========================================
+// 7) POST-PROCESSING & RECOVERY
+// ========================================
+async function postProcess(data: any, markdown: string, docType: string, source: string) {
   const schema = docType === "receipt" ? RECEIPT_SCHEMA : INVOICE_SCHEMA;
-  let confidence = calculateConfidence(normalized, schema, validation);
   
+  // Set default currency
+  if (!data.currency) {
+    data.currency = docType === "receipt" ? "CAD" : "USD";
+  }
+
+  // Normalize
+  data = normalizeNumbers(data);
+  data = normalizeDate(data);
+
+  // Validate
+  let validation = docType === "receipt" ? validateTotals(data, markdown) : null;
+  let confidence = calculateConfidence(data, schema, validation);
+
+  // Check if recovery needed
+  const required = schema.required || [];
+  const missing = required.filter((f: string) => !data[f]);
+  const needsRecovery = confidence < 0.6 || missing.length > 0;
+
   let recoveredFields: string[] = [];
-  let recoveryAttempted = false;
-  
-  // Agent Recovery if confidence < 0.6 or missing required fields
-  const missingFields = schema.required.filter((f: string) => !normalized[f]);
-  
-  if (confidence < 0.6 || missingFields.length > 0) {
-    console.log("Low confidence or missing fields, attempting recovery...", { confidence, missingFields });
-    recoveryAttempted = true;
+  let recoverySource = "";
+
+  if (needsRecovery) {
+    console.log(`Triggering LLM recovery (confidence: ${confidence.toFixed(2)}, missing: ${missing.join(", ")})`);
+    const recoveredData = await extractWithLLM(markdown, docType, true, missing);
     
-    const recovered = await extractWithLLM(markdown, docType, true, missingFields);
+    // Merge recovered fields
+    for (const field of missing) {
+      if (recoveredData[field]) {
+        data[field] = recoveredData[field];
+        recoveredFields.push(field);
+      }
+    }
     
-    if (recovered) {
-      // Merge recovered values
-      for (const field of missingFields) {
-        if (recovered[field]) {
-          normalized[field] = recovered[field];
-          recoveredFields.push(field);
-        }
-      }
+    if (recoveredFields.length > 0) {
+      recoverySource = "llm";
       
-      // Re-validate and recalculate confidence
-      if (docType === "receipt") {
-        validation = validateTotals(normalized, markdown);
-      }
-      confidence = calculateConfidence(normalized, schema, validation);
+      // Re-normalize and validate
+      data = normalizeNumbers(data);
+      data = normalizeDate(data);
+      validation = docType === "receipt" ? validateTotals(data, markdown) : null;
+      confidence = calculateConfidence(data, schema, validation);
       
-      console.log("Recovery completed:", { recoveredFields, newConfidence: confidence });
+      console.log(`Recovery completed: ${recoveredFields.join(", ")} (new confidence: ${confidence.toFixed(2)})`);
     }
   }
-  
-  // Redact PANs (keep last 4 digits)
-  if (normalized.card_number) {
-    const lastFour = normalized.card_number.slice(-4);
-    normalized.card_number = `****${lastFour}`;
-  }
-  
+
   return {
-    normalized,
+    data,
     confidence,
     validation,
-    recoveredFields,
-    recoveryAttempted,
     metadata: {
-      parsed_at: new Date().toISOString(),
+      source: source,
       doc_type: docType,
       tax_rule: validation?.rule || null,
-      recovery_attempted: recoveryAttempted,
-      recovered_fields: recoveredFields
-    }
+      parsed_at: new Date().toISOString(),
+      recovery_attempted: recoveredFields.length > 0,
+      recovered_fields: recoveredFields,
+      recovery_source: recoverySource,
+    },
   };
 }
 
+// ========================================
+// 8) MAIN HANDLER
+// ========================================
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -310,7 +419,7 @@ serve(async (req) => {
     );
 
     const { documentId } = await req.json();
-    console.log("Parsing document:", documentId);
+    console.log("=== Starting document processing:", documentId);
 
     // Update status to parsing
     await supabaseClient
@@ -318,7 +427,7 @@ serve(async (req) => {
       .update({ status: "parsing" })
       .eq("id", documentId);
 
-    // Get document details
+    // Get document
     const { data: document, error: docError } = await supabaseClient
       .from("documents")
       .select("*")
@@ -326,79 +435,62 @@ serve(async (req) => {
       .single();
 
     if (docError) throw docError;
-    
-    // Use the doc_type from document if set, otherwise classify
-    let docType = document.doc_type;
 
-    // Download file from storage
+    // Step 1: Download file
+    console.log("Step 1: Downloading file...");
     const { data: fileData, error: storageError } = await supabaseClient.storage
       .from("documents")
       .download(document.storage_path);
 
     if (storageError) throw storageError;
 
-    // Extract text (mock markdown for now - in production use proper parser)
-    const text = await fileData.text();
-    const markdown = `# Document\n\n${text.substring(0, 2000)}`; // Simplified
-    
-    // Step 1: Classify if not already set
-    if (!docType) {
-      docType = await classifyDocument(markdown);
-      console.log("Document classified as:", docType);
-      
-      // Update doc_type
+    const fileBuffer = await fileData.arrayBuffer();
+    console.log("File downloaded, size:", fileBuffer.byteLength);
+
+    // Step 2: ADE Parse - Extract markdown
+    console.log("Step 2: Parsing with ADE...");
+    const markdown = await parseDocumentWithADE(fileBuffer, document.mime_type, document.filename);
+    console.log("Markdown extracted, length:", markdown.length);
+
+    // Step 3: Classify
+    const docType = document.doc_type || (await classifyDocument(markdown));
+    console.log("Step 3: Document type:", docType);
+
+    if (!document.doc_type) {
       await supabaseClient
         .from("documents")
         .update({ doc_type: docType })
         .eq("id", documentId);
-    } else {
-      console.log("Using user-selected doc type:", docType);
     }
-    
-    // Step 2: Extract with LLM (or mock if API unavailable)
-    let adeResult = await extractWithLLM(markdown, docType);
-    
-    // Fallback to mock if LLM fails
-    if (!adeResult) {
-      console.log("Using mock extraction");
-      adeResult = docType === "receipt" ? {
-        merchant_name: "Sample Vendor",
-        datetime: new Date().toISOString(),
-        subtotal: 43.49,
-        tps: 2.17,
-        tvq: 4.34,
-        total: 50.00,
-        currency: "CAD",
-        line_items: []
-      } : {
-        vendor_name: "Sample Vendor Corp",
-        invoice_number: `INV-${Math.floor(Math.random() * 10000)}`,
-        invoice_date: new Date().toISOString().split('T')[0],
-        total: 50.00,
-        currency: "USD",
-        line_items: []
-      };
-    }
-    
-    // Step 3: Post-process (normalize, validate, recovery)
-    const processed = await postProcess(documentId, adeResult, markdown, docType, document.organization_id, supabaseClient);
 
-    // Check if ADE result already exists
+    // Step 4: ADE Extract
+    console.log("Step 4: Extracting with ADE...");
+    const extractedData = await extractWithADE(markdown, docType);
+    console.log("Extracted fields:", Object.keys(extractedData).join(", "));
+
+    // Determine source
+    const extractionSource = LANDINGAI_API_KEY ? "ade" : "llm_only";
+
+    // Step 5: Post-process, validate, conditionally recover
+    console.log("Step 5: Post-processing...");
+    const result = await postProcess(extractedData, markdown, docType, extractionSource);
+
+    // Save ADE result
     const { data: existingAde } = await supabaseClient
       .from("ade_results")
       .select("id")
       .eq("document_id", documentId)
-      .single();
+      .maybeSingle();
 
     let adeData;
     if (existingAde) {
-      // Update existing
       const { data: updated, error: updateError } = await supabaseClient
         .from("ade_results")
         .update({
-          ade_json: processed.normalized,
-          confidence_score: processed.confidence,
-          metadata: processed.metadata
+          markdown_content: markdown,
+          ade_json: result.data,
+          confidence_score: result.confidence,
+          metadata: result.metadata
         })
         .eq("id", existingAde.id)
         .select()
@@ -407,14 +499,14 @@ serve(async (req) => {
       if (updateError) throw updateError;
       adeData = updated;
     } else {
-      // Create new
       const { data: created, error: createError } = await supabaseClient
         .from("ade_results")
         .insert({
           document_id: documentId,
-          ade_json: processed.normalized,
-          confidence_score: processed.confidence,
-          metadata: processed.metadata
+          markdown_content: markdown,
+          ade_json: result.data,
+          confidence_score: result.confidence,
+          metadata: result.metadata
         })
         .select()
         .single();
@@ -423,22 +515,21 @@ serve(async (req) => {
       adeData = created;
     }
 
-    // Check if record exists
+    // Save record
     const { data: existingRecord } = await supabaseClient
       .from("records")
       .select("id")
       .eq("document_id", documentId)
-      .single();
+      .maybeSingle();
 
     let record;
     if (existingRecord) {
-      // Update existing
       const { data: updated, error: updateError } = await supabaseClient
         .from("records")
         .update({
           record_type: docType,
-          normalized_data: processed.normalized,
-          validation_result: processed.validation
+          normalized_data: result.data,
+          validation_result: result.validation
         })
         .eq("id", existingRecord.id)
         .select()
@@ -447,16 +538,15 @@ serve(async (req) => {
       if (updateError) throw updateError;
       record = updated;
     } else {
-      // Create new
       const { data: created, error: createError } = await supabaseClient
         .from("records")
         .insert({
           document_id: documentId,
           organization_id: document.organization_id,
           record_type: docType,
-          status: processed.confidence >= 0.6 ? "pending_review" : "needs_review",
-          normalized_data: processed.normalized,
-          validation_result: processed.validation
+          status: "pending_review",
+          normalized_data: result.data,
+          validation_result: result.validation
         })
         .select()
         .single();
@@ -465,17 +555,16 @@ serve(async (req) => {
       record = created;
     }
 
-    // Update document status to ready
+    // Update document status
     await supabaseClient
       .from("documents")
       .update({ status: "ready" })
       .eq("id", documentId);
 
-    console.log("Document parsed successfully:", {
-      documentId,
+    console.log("=== Processing complete:", {
       docType,
-      confidence: processed.confidence,
-      recoveredFields: processed.recoveredFields
+      confidence: result.confidence.toFixed(2),
+      recoveredFields: result.metadata.recovered_fields
     });
 
     return new Response(
@@ -484,32 +573,32 @@ serve(async (req) => {
         recordId: record.id,
         adeResultId: adeData.id,
         docType,
-        confidence: processed.confidence,
-        recoveredFields: processed.recoveredFields
+        confidence: result.confidence,
+        recoveredFields: result.metadata.recovered_fields
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error: any) {
-    console.error("Error parsing document:", error);
+    console.error("=== Error parsing document:", error);
     
-    const { documentId } = await req.json().catch(() => ({}));
-    
-    if (documentId) {
+    try {
+      const { documentId } = await req.json();
       const supabaseClient = createClient(
         Deno.env.get("SUPABASE_URL") ?? "",
         Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
       );
+      
       await supabaseClient
         .from("documents")
         .update({ 
           status: "error",
-          error_message: error?.message || "Unknown error" 
+          error_message: error.message 
         })
         .eq("id", documentId);
-    }
+    } catch {}
 
     return new Response(
-      JSON.stringify({ error: error?.message || "Unknown error" }),
+      JSON.stringify({ error: error.message }),
       { 
         status: 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" } 
