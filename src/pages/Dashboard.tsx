@@ -118,21 +118,32 @@ const Dashboard = () => {
         if (uploadError) throw uploadError;
 
         // Create document record
-        const { error: dbError } = await supabase.from("documents").insert({
-          organization_id: profile.organization_id,
-          filename: file.name,
-          storage_path: filePath,
-          mime_type: file.type,
-          file_size: file.size,
-          status: "uploaded",
-        });
+        const { data: newDoc, error: dbError } = await supabase
+          .from("documents")
+          .insert({
+            organization_id: profile.organization_id,
+            filename: file.name,
+            storage_path: filePath,
+            mime_type: file.type,
+            file_size: file.size,
+            status: "uploaded",
+          })
+          .select()
+          .single();
 
         if (dbError) throw dbError;
+
+        // Auto-trigger parsing
+        supabase.functions.invoke('parse-document', {
+          body: { documentId: newDoc.id }
+        }).catch(err => {
+          console.error('Auto-parse failed:', err);
+        });
       }
 
       toast({
         title: "Success",
-        description: `Uploaded ${acceptedFiles.length} file(s)`,
+        description: `Uploaded ${acceptedFiles.length} file(s) - parsing started`,
       });
 
       refetchDocuments();

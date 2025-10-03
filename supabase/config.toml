@@ -17,3 +17,6 @@ verify_jwt = true
 
 [functions.ensure-organization]
 verify_jwt = true
+
+[functions.parse-document]
+verify_jwt = true

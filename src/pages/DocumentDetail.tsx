@@ -66,6 +66,19 @@ const DocumentDetail = () => {
     },
   });
 
+  // Get document preview URL
+  const { data: documentUrl } = useQuery({
+    queryKey: ["documentUrl", document?.storage_path],
+    queryFn: async () => {
+      if (!document?.storage_path) return null;
+      const { data } = await supabase.storage
+        .from("documents")
+        .createSignedUrl(document.storage_path, 3600);
+      return data?.signedUrl || null;
+    },
+    enabled: !!document?.storage_path,
+  });
+
   const { data: adeResult } = useQuery({
     queryKey: ["ade-result", id],
     queryFn: async () => {
@@ -269,14 +282,43 @@ const DocumentDetail = () => {
               <CardTitle>Document Preview</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="aspect-[8.5/11] border rounded-lg bg-muted flex items-center justify-center">
-                <div className="text-center">
-                  <FileText className="mx-auto h-16 w-16 text-muted-foreground mb-4" />
-                  <p className="text-muted-foreground">
-                    PDF preview will be available soon
-                  </p>
+              {documentUrl ? (
+                <div className="border rounded-lg overflow-hidden">
+                  {document.mime_type?.startsWith('image/') ? (
+                    <img 
+                      src={documentUrl} 
+                      alt={document.filename}
+                      className="w-full h-auto"
+                    />
+                  ) : document.mime_type === 'application/pdf' ? (
+                    <iframe
+                      src={documentUrl}
+                      className="w-full h-[600px]"
+                      title={document.filename}
+                    />
+                  ) : (
+                    <div className="aspect-[8.5/11] bg-muted/50 flex items-center justify-center">
+                      <div className="text-center">
+                        <FileText className="mx-auto h-16 w-16 text-muted-foreground mb-4" />
+                        <p className="text-muted-foreground mb-2">
+                          Preview not available for this file type
+                        </p>
+                        <Button variant="outline" size="sm" asChild>
+                          <a href={documentUrl} download={document.filename}>
+                            <Download className="mr-2 h-4 w-4" />
+                            Download
+                          </a>
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                 </div>
-              </div>
+              ) : (
+                <div className="aspect-[8.5/11] bg-muted/50 flex items-center justify-center">
+                  <FileText className="mx-auto h-16 w-16 text-muted-foreground mb-4" />
+                  <p className="text-muted-foreground">Loading preview...</p>
+                </div>
+              )}
             </CardContent>
           </Card>
 
@@ -328,7 +370,24 @@ const DocumentDetail = () => {
                       <div className="text-center py-8 text-muted-foreground">
                         <AlertCircle className="mx-auto h-8 w-8 mb-2" />
                         <p>No extraction data available yet</p>
-                        <p className="text-sm">Process this document to extract data</p>
+                        <p className="text-sm mb-4">Process this document to extract data</p>
+                        {document.status === 'uploaded' && (
+                          <Button 
+                            onClick={async () => {
+                              await supabase.functions.invoke('parse-document', {
+                                body: { documentId: document.id }
+                              });
+                              toast({ 
+                                title: "Extracting data...",
+                                description: "Document parsing started"
+                              });
+                              refetch();
+                            }}
+                            size="sm"
+                          >
+                            Extract Data Now
+                          </Button>
+                        )}
                       </div>
                     )}
                   </CardContent>
