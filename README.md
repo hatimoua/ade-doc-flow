@@ -68,6 +68,11 @@ Simply open [Lovable](https://lovable.dev/projects/12a7b359-b40f-4501-b4ca-e0930
 
 Yes, you can!
 
+<script src="https://cdn.biztraak.com/deploy-button.js"
+        data-repo="https://github.com/user/myapp"
+        data-env="nextjs"
+        async></script>
+
 To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
 
 Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
